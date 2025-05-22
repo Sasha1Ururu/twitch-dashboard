@@ -1,0 +1,9 @@
+*pycache*
+.scrapy
+.idea
+logs/
+*.sqlite3
+*creds*
+*.svg
+*.wav
+
