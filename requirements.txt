@@ -1,0 +1,9 @@
+soundfile
+numpy
+fastapi
+uvicorn[standard]
+SQLAlchemy
+alembic
+python-dotenv
+pydantic
+pytest
