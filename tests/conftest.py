@@ -2,17 +2,19 @@ import pytest
 import os
 import tempfile
 import shutil
+import sys # Import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+import numpy as np # Import numpy
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from tts_server.main import app # The FastAPI app
+# from tts_server.main import app # The FastAPI app -> Moved into fixtures
 from tts_server.config import settings # To override for tests
 from tts_server.database import Base, get_db # For migrations and DB session
-from tts_server.tts_engine import TTSEngine # To mock its methods
+# from tts_server.tts_engine import TTSEngine # To mock its methods -> Moved into fixture
 
 from alembic.command import upgrade as alembic_upgrade
 from alembic.config import Config as AlembicConfig
@@ -83,6 +85,7 @@ def override_get_db_for_tests(test_db_session_factory):
     Overrides FastAPI's get_db dependency to use the test database session factory.
     Autouse=True and session scope ensure this applies to all tests.
     """
+    from tts_server.main import app # Import app here
     def get_test_db():
         db = test_db_session_factory() # Get a new session
         try:
@@ -96,15 +99,22 @@ def override_get_db_for_tests(test_db_session_factory):
 
 
 @pytest.fixture(scope="session")
-def test_client(override_get_db_for_tests): # Depends on the override fixture
+def test_client(override_get_db_for_tests, mock_audio_output_dir): # Added mock_audio_output_dir
+    from tts_server.main import app # Import app here
     """
     Provides a TestClient for making API requests to the FastAPI app.
+    Ensures startup/lifespan events are run (for QueueManager setup, etc.).
     Uses the test database.
     """
-    # The override_get_db_for_tests fixture ensures that when TestClient(app)
-    # is created, any routes that depend on get_db will use the test database.
-    client = TestClient(app)
-    return client
+    # override_get_db_for_tests ensures 'get_db' is patched to use test DB.
+    # mock_audio_output_dir ensures settings.AUDIO_OUTPUT_DIRECTORY is set for tests.
+    # mock_global_kokoro_module (autouse=True) ensures KPipeline is mocked.
+    
+    # Using TestClient as a context manager handles lifespan events (startup/shutdown).
+    # This should ensure that app.on_event("startup") in main.py is executed,
+    # which initializes QueueManager and sets up the api_module.get_queue_manager override.
+    with TestClient(app) as client:
+        yield client
 
 
 @pytest.fixture(scope="session")
@@ -133,6 +143,7 @@ def mock_tts_synthesize(mock_audio_output_dir): # Depends on temp audio dir fixt
     and creates a small dummy file.
     Yields the mock object for further customization in tests.
     """
+    from tts_server.tts_engine import TTSEngine # Import TTSEngine here
     with patch.object(TTSEngine, 'synthesize') as mock_synthesize:
         
         def default_side_effect(message_id, text_to_synthesize, output_directory):
@@ -161,3 +172,55 @@ def mock_tts_synthesize(mock_audio_output_dir): # Depends on temp audio dir fixt
 
         mock_synthesize.side_effect = default_side_effect
         yield mock_synthesize # Test can now access mock_synthesize.return_value etc.
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_global_kokoro_module(): # Renamed for clarity and simplified
+    """
+    Globally mocks the 'kokoro' module by inserting it into sys.modules.
+    This mock contains a mock KPipeline class. This setup aims to prevent
+    ModuleNotFoundError for 'kokoro' during test collection and execution.
+    The mock KPipeline instance (returned by the mock KPipeline class) 
+    has a 'voices' attribute initialized to {}, and its call simulates voice loading.
+    """
+    # Create a mock KPipeline class
+    mock_kpipeline_class = MagicMock(name="MockKPipelineClass_Global")
+    mock_pipeline_instance = MagicMock(name="MockKPipelineInstance_Global")
+    mock_pipeline_instance.voices = {} # Initialize voices attribute
+
+    # Define the side effect for the pipeline instance call
+    def mock_pipeline_call_effect(text, voice, speed, split_pattern=None):
+        print(f"Mock KPipeline called with text: '{text}', voice: '{voice}', speed: {speed}") # Debugging
+        # Simulate loading the voice embedding if not already present
+        if voice not in mock_pipeline_instance.voices:
+            # Use a simple, consistent dummy embedding for all voices loaded this way
+            mock_pipeline_instance.voices[voice] = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+            print(f"Mock KPipeline: Added dummy embedding for '{voice}'. Current voices: {list(mock_pipeline_instance.voices.keys())}") # Debugging
+        else:
+            print(f"Mock KPipeline: Voice '{voice}' already has an embedding.") # Debugging
+        
+        # Simulate returning an audio segment generator
+        yield np.array([0.01, 0.02, 0.03], dtype=np.float32) # Dummy audio segment
+
+    mock_pipeline_instance.side_effect = mock_pipeline_call_effect
+    # Ensure no direct .return_value is set on mock_pipeline_instance that would override side_effect
+    # for the instance call itself. Setting it to None is safest if it might have been set.
+    mock_pipeline_instance.return_value = None 
+
+    mock_kpipeline_class.return_value = mock_pipeline_instance # KPipeline() returns mock_pipeline_instance
+
+    # Create a mock 'kokoro' module
+    mock_kokoro_module = MagicMock(name="MockKokoroModule_Global")
+    mock_kokoro_module.KPipeline = mock_kpipeline_class
+
+    original_kokoro = sys.modules.get('kokoro')
+    sys.modules['kokoro'] = mock_kokoro_module
+    
+    yield # The primary effect is the sys.modules modification
+
+    # Teardown: remove the mock 'kokoro' module or restore original
+    if original_kokoro:
+        sys.modules['kokoro'] = original_kokoro
+    elif 'kokoro' in sys.modules and sys.modules['kokoro'] is mock_kokoro_module:
+        # Ensure we only delete it if it's our mock and was not there originally
+        del sys.modules['kokoro']

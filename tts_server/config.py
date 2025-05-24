@@ -1,28 +1,31 @@
 import os
 import json
 from typing import Dict, Any, Optional
-from pydantic import BaseSettings, validator, root_validator
+from pydantic_settings import BaseSettings
+from pydantic import field_validator, model_validator, RootModel # Updated imports
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./tts_server/tts_database.db"
     AUDIO_OUTPUT_DIRECTORY: str = "tts_server/audio_files"
     USERNAME: str = "YourTwitchUsername"
     AUTOPLAY_COOLDOWN: int = 10  # seconds
-    VOICE_CONFIG_STR: str = "am_adam50_am_michael50"
-    VOICE_MAPPINGS_JSON: str = '{"am_adam": "am_adam", "am_michael": "am_michael"}'
+    VOICE_CONFIG_STR: str = "adam50_michael50"
+    VOICE_MAPPINGS_JSON: str = '{"adam": "am_adam", "michael": "am_michael"}'
     LANG_CODE: str = "en"
     TTS_SERVER_HOST: str = "127.0.0.1"
     TTS_SERVER_PORT: int = 8008
     TTS_ENGINE_SPEED: float = 0.85
     LOG_LEVEL: str = "INFO"
     KOKORO_LANG_CODE: str = "a" # as used in tts/tts.py
+    DEFAULT_VOICE: str = "adam"
     WORKER_POLL_INTERVAL: float = 1.0 # seconds
 
     # This field will be populated by the validator, not loaded from .env
-    parsed_voice_mappings: Optional[Dict[str, str]] = None
+    parsed_voice_mappings: Optional[Dict[str, str]] = {} # Initialize as empty dict
 
-    @validator("VOICE_MAPPINGS_JSON", always=True)
-    def parse_voice_mappings_json(cls, v: str, values: Dict[str, Any]) -> str:
+    @field_validator("VOICE_MAPPINGS_JSON")
+    def validate_voice_mappings_json_format(cls, v: str) -> str:
+        """Validates that VOICE_MAPPINGS_JSON is a valid JSON string representing a dictionary."""
         try:
             parsed_map = json.loads(v)
             if not isinstance(parsed_map, dict):
@@ -30,15 +33,27 @@ class Settings(BaseSettings):
             for key, value in parsed_map.items():
                 if not isinstance(key, str) or not isinstance(value, str):
                     raise ValueError("All keys and values in VOICE_MAPPINGS_JSON must be strings.")
-            values["parsed_voice_mappings"] = parsed_map
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in VOICE_MAPPINGS_JSON: {e}")
-        return v # Return the original string value for VOICE_MAPPINGS_JSON field
+        return v # Return the original string value
 
-    # Using root_validator to ensure AUDIO_OUTPUT_DIRECTORY is available
-    @root_validator(skip_on_failure=True) # pre=False (default for root_validator)
-    def ensure_audio_output_directory_exists(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        audio_dir = values.get("AUDIO_OUTPUT_DIRECTORY")
+    @model_validator(mode='after')
+    def populate_parsed_voice_mappings(self) -> 'Settings':
+        """Populates parsed_voice_mappings from VOICE_MAPPINGS_JSON after validation."""
+        if self.VOICE_MAPPINGS_JSON: # Check if it has a value
+            try:
+                # Validation of format already done by field_validator
+                self.parsed_voice_mappings = json.loads(self.VOICE_MAPPINGS_JSON)
+            except json.JSONDecodeError:
+                # This should ideally not happen if field_validator worked, but as a safeguard:
+                self.parsed_voice_mappings = {} # Default to empty on unforeseen error
+        else:
+            self.parsed_voice_mappings = {} # Default if VOICE_MAPPINGS_JSON is empty or None
+        return self
+
+    @model_validator(mode='after') # Replaces root_validator
+    def ensure_audio_output_directory_exists(self) -> 'Settings':
+        audio_dir = self.AUDIO_OUTPUT_DIRECTORY
         if audio_dir:
             try:
                 # Construct path relative to project root if needed, or ensure it's absolute
@@ -66,7 +81,7 @@ class Settings(BaseSettings):
             # This case should ideally not happen if AUDIO_OUTPUT_DIRECTORY has a default.
             raise ValueError("AUDIO_OUTPUT_DIRECTORY is not set.")
             
-        return values
+        return self # Changed from 'return values' to 'return self'
 
     class Config:
         # Pydantic will look for a .env file in the current directory

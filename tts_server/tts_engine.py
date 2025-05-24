@@ -10,9 +10,13 @@ default_logger = logging.getLogger(__name__)
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
+from typing import Optional, List, Tuple, Dict # Added for type hints
+
 class TTSEngine:
-    def __init__(self, lang_code: str, voice_config_str: str, 
-                 voice_mappings: dict, tts_speed: float, logger=None):
+    def __init__(self, lang_code: str, voice_config_str: str,
+                 voice_mappings: dict, tts_speed: float,
+                 default_voice_friendly_name: Optional[str] = None, # New parameter
+                 logger=None):
         """
         Initializes the TTS Engine.
         Args:
@@ -20,17 +24,23 @@ class TTSEngine:
             voice_config_str (str): Voice configuration string (e.g., "jared50_lex30_martha20").
             voice_mappings (dict): Mappings from friendly names to kokoro internal voice names.
             tts_speed (float): Speed for TTS synthesis.
+            default_voice_friendly_name (Optional[str]): Default friendly voice name to use if ratios sum < 1.0 or are 0.
             logger: A Python logger instance. Uses a default logger if None.
         """
         self.logger = logger if logger else default_logger
         self.logger.info(f"Initializing TTSEngine with lang_code='{lang_code}', speed={tts_speed}")
-        self.logger.debug(f"Voice config string: '{voice_config_str}', Mappings: {voice_mappings}")
+        self.logger.debug(f"Voice config string: '{voice_config_str}', Mappings: {voice_mappings}, Default friendly voice: {default_voice_friendly_name}")
 
         try:
             self.pipeline = KPipeline(lang_code=lang_code)
             self.tts_speed = tts_speed
+            self.default_voice_friendly_name = default_voice_friendly_name # Store new parameter
             
-            parsed_voice_data = self._parse_voice_config(voice_config_str, voice_mappings)
+            parsed_voice_data = self._parse_voice_config(
+                voice_config_str, 
+                voice_mappings,
+                self.default_voice_friendly_name # Pass to parser
+            )
             self.logger.info(f"Parsed voice data: {parsed_voice_data}")
             
             self._load_and_mix_voices(parsed_voice_data)
@@ -44,102 +54,134 @@ class TTSEngine:
             # Depending on policy, might re-raise or handle to allow app to start degraded
             raise RuntimeError(f"Failed to initialize TTSEngine: {e}")
 
-
-    def _parse_voice_config(self, voice_config_str: str, voice_mappings: dict) -> list:
+    def _parse_voice_config(self, voice_config_str: str, voice_mappings: Dict[str, str], 
+                            default_voice_friendly_name: Optional[str]) -> List[Tuple[str, float]]:
         """
-        Parses the voice configuration string.
-        Example: "jared50_lex30_martha20" -> [("am_adam", 0.50), ("am_echo", 0.30), ...]
+        Parses the voice configuration string and applies new logic for default voice and normalization.
         """
-        self.logger.debug(f"Parsing voice config: '{voice_config_str}' with mappings: {voice_mappings}")
-        parsed_voices = []
-        total_percentage = 0
+        self.logger.debug(
+            f"Parsing voice config: '{voice_config_str}' with mappings: {voice_mappings}, "
+            f"default_voice: '{default_voice_friendly_name}'"
+        )
 
         if not voice_config_str:
             self.logger.error("Voice configuration string is empty.")
-            raise ValueError("Voice configuration string cannot be empty.")
+            # This case should be handled by the new logic: if config is empty, sum_ratios will be 0,
+            # and default voice should be used. If default voice is also not set, then it's an error.
+            # Let's keep the explicit check for clarity, but adapt the logic.
+            # If voice_config_str is empty, initial_parsed_voices will be empty, sum_ratios = 0.
+            # The logic for sum_ratios == 0 will then apply.
+            pass # Allow to proceed to sum_ratios logic
 
-        parts = voice_config_str.split('_')
-        if not parts:
-            self.logger.error("Voice configuration string format is invalid. Expected format like 'namePERCENT_namePERCENT'.")
-            raise ValueError("Invalid voice configuration string format.")
+        initial_parsed_voices: List[Tuple[str, float]] = []
+        
+        if voice_config_str: # Only parse if not empty
+            parts = voice_config_str.split('_')
+            for part in parts:
+                try:
+                    name_part = ""
+                    percent_part_str = ""
+                    for char_idx in range(len(part) - 1, -1, -1):
+                        if part[char_idx].isdigit():
+                            percent_part_str = part[char_idx] + percent_part_str
+                        else:
+                            name_part = part[:char_idx + 1]
+                            break
+                    
+                    if not name_part or not percent_part_str:
+                        self.logger.error(f"Could not separate name and percentage from part '{part}'.")
+                        raise ValueError(f"Could not separate name and percentage from part '{part}'.")
 
-        for part in parts:
-            try:
-                # Find the split point between name and percentage (last digits)
-                name_part = ""
-                percent_part_str = ""
-                for char_idx in range(len(part) -1, -1, -1):
-                    if part[char_idx].isdigit():
-                        percent_part_str = part[char_idx] + percent_part_str
-                    else:
-                        name_part = part[:char_idx+1]
-                        break
+                    friendly_name = name_part
+                    percentage = int(percent_part_str)
+
+                    if friendly_name not in voice_mappings:
+                        self.logger.error(f"Friendly name '{friendly_name}' not found in voice_mappings.")
+                        raise ValueError(f"Voice name '{friendly_name}' not found in mappings.")
+                    
+                    kokoro_voice_name = voice_mappings[friendly_name]
+                    initial_parsed_voices.append((kokoro_voice_name, float(percentage) / 100.0))
                 
-                if not name_part or not percent_part_str:
-                    raise ValueError(f"Could not separate name and percentage from part '{part}'.")
+                except ValueError as e:
+                    self.logger.error(f"Error parsing voice part '{part}': {e}")
+                    raise ValueError(f"Invalid format in voice part '{part}': {e}")
+                except Exception as e:
+                    self.logger.error(f"Unexpected error parsing voice part '{part}': {e}")
+                    raise ValueError(f"Unexpected error parsing voice part '{part}'.")
 
-                friendly_name = name_part
-                percentage = int(percent_part_str)
+        current_sum_ratios = sum(ratio for _, ratio in initial_parsed_voices)
+        self.logger.debug(f"Initial parsed voices: {initial_parsed_voices}, sum of ratios: {current_sum_ratios:.4f}")
 
-                if friendly_name not in voice_mappings:
-                    self.logger.error(f"Friendly name '{friendly_name}' not found in voice_mappings.")
-                    raise ValueError(f"Voice name '{friendly_name}' not found in mappings.")
-                
-                kokoro_voice_name = voice_mappings[friendly_name]
-                parsed_voices.append((kokoro_voice_name, float(percentage) / 100.0))
-                total_percentage += percentage
+        final_voices: List[Tuple[str, float]] = []
+        epsilon = 1e-9
+
+        if not voice_config_str and not default_voice_friendly_name:
+             self.logger.error("Voice configuration string is empty and no default voice is specified.")
+             raise ValueError("Voice configuration string cannot be empty if no default voice is specified.")
+
+        if abs(current_sum_ratios) < epsilon: # Handles empty voice_config_str or all ratios are zero (e.g. "adam0")
+            self.logger.info(f"Sum of ratios is {current_sum_ratios:.4f}. Using default voice.")
+            if not default_voice_friendly_name:
+                self.logger.error("Default voice friendly name not provided, but required when ratios sum to 0.")
+                raise ValueError("Default voice must be specified when voice_config_str sums to 0% or is empty.")
+            if default_voice_friendly_name not in voice_mappings:
+                self.logger.error(f"Default voice '{default_voice_friendly_name}' not found in voice mappings.")
+                raise ValueError(f"Default voice '{default_voice_friendly_name}' not found in voice mappings.")
             
-            except ValueError as e: # Catch int conversion errors or manual raises
-                self.logger.error(f"Error parsing voice part '{part}': {e}")
-                raise ValueError(f"Invalid format in voice part '{part}': {e}")
-            except Exception as e:
-                self.logger.error(f"Unexpected error parsing voice part '{part}': {e}")
-                raise ValueError(f"Unexpected error parsing voice part '{part}'.")
+            default_kokoro_name = voice_mappings[default_voice_friendly_name]
+            final_voices = [(default_kokoro_name, 1.0)]
+            self.logger.info(f"Using default voice: {final_voices}")
 
+        elif current_sum_ratios > epsilon and current_sum_ratios < 1.0 - epsilon: # Sum is > 0 and < 1
+            self.logger.info(f"Sum of ratios ({current_sum_ratios:.4f}) is less than 1.0. Adding default voice for remainder.")
+            if not default_voice_friendly_name:
+                self.logger.error("Default voice friendly name not provided, but required when ratios sum to less than 1.0.")
+                raise ValueError("Default voice must be specified when voice_config_str sums to less than 100%.")
+            if default_voice_friendly_name not in voice_mappings:
+                self.logger.error(f"Default voice '{default_voice_friendly_name}' not found in voice mappings.")
+                raise ValueError(f"Default voice '{default_voice_friendly_name}' not found in voice mappings.")
 
-        if not abs(total_percentage - 100) < 1e-9 : # Using float comparison for sum
-             # Option to normalize if slightly off, or raise error. Current: strict.
-            self.logger.warning(f"Total percentage from voice config is {total_percentage}%, not 100%. Normalizing.")
-            # Normalization logic (optional, based on strictness)
-            if total_percentage == 0:
-                self.logger.error("Total percentage is 0, cannot normalize.")
-                raise ValueError("Total percentage from voice config is 0.")
+            default_kokoro_name = voice_mappings[default_voice_friendly_name]
+            remainder_ratio = 1.0 - current_sum_ratios
             
+            final_voices_dict: Dict[str, float] = {name: ratio for name, ratio in initial_parsed_voices}
+            final_voices_dict[default_kokoro_name] = final_voices_dict.get(default_kokoro_name, 0.0) + remainder_ratio
+            final_voices = list(final_voices_dict.items())
+            self.logger.info(f"Added/updated default voice. Final mix: {final_voices}")
+
+        elif current_sum_ratios > 1.0 + epsilon: # Sum is > 1
+            self.logger.warning(
+                f"Total ratio from voice config ({current_sum_ratios:.4f}) is > 1.0. Normalizing explicitly parsed voices."
+            )
+            # Normalize only the explicitly parsed voices
             normalized_voices = []
-            current_sum_normalized_ratios = 0
-            for name, ratio in parsed_voices:
-                normalized_ratio = ratio * (100.0 / total_percentage)
-                normalized_voices.append((name, normalized_ratio))
-                current_sum_normalized_ratios += normalized_ratio * 100
+            for name, ratio in initial_parsed_voices:
+                normalized_voices.append((name, ratio / current_sum_ratios))
+            final_voices = normalized_voices
+            self.logger.info(f"Normalized voice ratios: {final_voices}")
+        
+        else: # Sum is approximately 1.0 (or initial_parsed_voices was empty but default logic handled it)
+            if not initial_parsed_voices and final_voices: # Default voice was used due to empty config
+                pass # final_voices already set
+            elif initial_parsed_voices: # Original sum was ~1.0 or config was empty but default voice not used (error)
+                final_voices = initial_parsed_voices
+                self.logger.info(f"Using provided voice config as is (sum is approx 1.0): {final_voices}")
+            # If initial_parsed_voices is empty and final_voices is also empty (e.g. empty config, no default),
+            # an error should have been raised earlier.
 
-            # Due to floating point arithmetic, the sum might not be exactly 100.
-            # Adjust the last element slightly if needed to ensure sum is precisely 1.0 (or 100 for percentage)
-            # This step is crucial if the sum of ratios must be exactly 1.0 for the mixing logic.
-            if normalized_voices:
-                 # Calculate sum of normalized ratios (float, e.g. 0.5, 0.3)
-                sum_ratios = sum(r for _, r in normalized_voices)
-                if not abs(sum_ratios - 1.0) < 1e-9 : # if sum is not 1.0
-                    # Simple adjustment: add difference to the last voice's ratio
-                    # This assumes the difference is small. A more robust approach might distribute the difference.
-                    diff = 1.0 - sum_ratios
-                    last_voice_name, last_voice_ratio = normalized_voices[-1]
-                    normalized_voices[-1] = (last_voice_name, last_voice_ratio + diff)
-                    self.logger.info(f"Adjusted last voice ratio by {diff} to ensure sum is 1.0.")
+        # Final check for sum of ratios (should be very close to 1.0 after normalization or default addition)
+        final_sum_ratios = sum(r for _, r in final_voices)
+        if not abs(final_sum_ratios - 1.0) < 1e-7:
+            self.logger.error(f"Sum of final voice ratios ({final_sum_ratios}) is not 1.0. This is unexpected. Voices: {final_voices}")
+            raise ValueError(f"Voice percentages do not sum to 1.0 even after processing (sum: {final_sum_ratios}).")
 
+        if not final_voices: # Should be caught by earlier checks, but as a safeguard
+            self.logger.error("Resulting voice configuration is empty, which is invalid.")
+            raise ValueError("Could not determine a valid voice configuration.")
+            
+        return final_voices
 
-            parsed_voices = normalized_voices
-            self.logger.info(f"Normalized voice percentages: {parsed_voices}")
-
-
-        # Final check for sum of ratios (should be very close to 1.0 after normalization)
-        final_sum_ratios = sum(r for _, r in parsed_voices)
-        if not abs(final_sum_ratios - 1.0) < 1e-7: # Stricter check after normalization
-            self.logger.error(f"Sum of voice ratios ({final_sum_ratios}) is not 1.0 after normalization. This is unexpected.")
-            raise ValueError(f"Voice percentages do not sum to 1.0 even after normalization attempts (sum: {final_sum_ratios}).")
-
-        return parsed_voices
-
-    def _load_and_mix_voices(self, parsed_voice_data: list):
+    def _load_and_mix_voices(self, parsed_voice_data: List[Tuple[str, float]]):
         """
         Loads individual voices, retrieves embeddings, mixes them, and registers the custom voice.
         """

@@ -35,7 +35,7 @@ def test_full_message_lifecycle(
         "bits_amount": 100,
         "message_type": "bits"
     }
-    response = test_client.post("/api/tts/add_message", json=add_payload)
+    response = test_client.post("/tts/add_message", json=add_payload) # Corrected prefix
     assert response.status_code == 201 # Created
     message_id = response.json()["message_id"]
     assert isinstance(message_id, int)
@@ -65,7 +65,7 @@ def test_full_message_lifecycle(
         assert str(Path(mock_audio_output_dir)) in generated_audio_path
 
     # Play Next
-    response = test_client.post("/api/tts/play_next")
+    response = test_client.post("/tts/play_next") # Corrected prefix
     assert response.status_code == 200
     play_next_data = response.json()
     assert play_next_data["message_id"] == message_id
@@ -78,7 +78,7 @@ def test_full_message_lifecycle(
         assert message.status == MessageStatusEnum.PLAYING
 
     # Mark Played
-    response = test_client.post(f"/api/tts/mark_played/{message_id}")
+    response = test_client.post(f"/tts/mark_played/{message_id}") # Corrected prefix
     assert response.status_code == 200
 
     # Verify Played
@@ -100,13 +100,13 @@ def test_switch_queue_and_play(
 ):
     # Add a "mention" message
     mention_payload = {"sent_by": "user_mention", "text": "Mention test", "message_type": "mentions"}
-    response_m = test_client.post("/api/tts/add_message", json=mention_payload)
+    response_m = test_client.post("/tts/add_message", json=mention_payload) # Corrected prefix
     assert response_m.status_code == 201
     message_id_mention = response_m.json()["message_id"]
 
     # Add a "bits" message
     bits_payload = {"sent_by": "user_bits", "text": "Bits test", "message_type": "bits", "bits_amount": 50}
-    response_b = test_client.post("/api/tts/add_message", json=bits_payload)
+    response_b = test_client.post("/tts/add_message", json=bits_payload) # Corrected prefix
     assert response_b.status_code == 201
     message_id_bits = response_b.json()["message_id"]
 
@@ -115,28 +115,28 @@ def test_switch_queue_and_play(
 
     # Initially active queue is "mentions" (default in QueueManager)
     # Verify by checking stats or by playing next
-    stats_response = test_client.get("/api/tts/active_queue_stats")
+    stats_response = test_client.get("/tts/active_queue_stats") # Corrected prefix
     assert stats_response.json()["active_queue_type"] == "mentions"
     
-    response_play_mention = test_client.post("/api/tts/play_next")
+    response_play_mention = test_client.post("/tts/play_next") # Corrected prefix
     assert response_play_mention.status_code == 200
     assert response_play_mention.json()["message_id"] == message_id_mention
-    test_client.post(f"/api/tts/mark_played/{message_id_mention}") # Mark as played
+    test_client.post(f"/tts/mark_played/{message_id_mention}") # Corrected prefix
 
     # Switch to "bits" queue
     switch_payload = {"queue_type": "bits"}
-    response_switch = test_client.post("/api/tts/switch_active_queue", json=switch_payload)
+    response_switch = test_client.post("/tts/switch_active_queue", json=switch_payload) # Corrected prefix
     assert response_switch.status_code == 200
 
     # Verify active queue is "bits"
-    stats_response_after_switch = test_client.get("/api/tts/active_queue_stats")
+    stats_response_after_switch = test_client.get("/tts/active_queue_stats") # Corrected prefix
     assert stats_response_after_switch.json()["active_queue_type"] == "bits"
 
     # Play next from "bits" queue
-    response_play_bits = test_client.post("/api/tts/play_next")
+    response_play_bits = test_client.post("/tts/play_next") # Corrected prefix
     assert response_play_bits.status_code == 200
     assert response_play_bits.json()["message_id"] == message_id_bits
-    test_client.post(f"/api/tts/mark_played/{message_id_bits}")
+    test_client.post(f"/tts/mark_played/{message_id_bits}") # Corrected prefix
 
 
 def test_clear_active_queue(
@@ -147,7 +147,7 @@ def test_clear_active_queue(
 ):
     # Add a "mention" message (m1) and let it become READY
     m1_payload = {"sent_by": "user_m1", "text": "Mention to be cleared 1 (ready)", "message_type": "mentions"}
-    response_m1 = test_client.post("/api/tts/add_message", json=m1_payload)
+    response_m1 = test_client.post("/tts/add_message", json=m1_payload) # Corrected prefix
     assert response_m1.status_code == 201
     m1_id = response_m1.json()["message_id"]
     
@@ -162,12 +162,12 @@ def test_clear_active_queue(
 
     # Add another "mention" message (m2), keep it PENDING (don't wait for worker)
     m2_payload = {"sent_by": "user_m2", "text": "Mention to be cleared 2 (pending)", "message_type": "mentions"}
-    response_m2 = test_client.post("/api/tts/add_message", json=m2_payload)
+    response_m2 = test_client.post("/tts/add_message", json=m2_payload) # Corrected prefix
     assert response_m2.status_code == 201
     m2_id = response_m2.json()["message_id"]
 
     # Clear active queue ("mentions" is default)
-    response_clear = test_client.post("/api/tts/clear_active_queue")
+    response_clear = test_client.post("/tts/clear_active_queue") # Corrected prefix
     assert response_clear.status_code == 200
     assert "messages marked as deleted" in response_clear.json()["message"]
 
@@ -218,7 +218,7 @@ def test_mentions_queue_overflow(
     msg_ids = []
     for i in range(1, 4): # msg1, msg2, msg3
         payload = {"sent_by": f"user_overflow_{i}", "text": f"Overflow test msg {i}", "message_type": "mentions"}
-        response = test_client.post("/api/tts/add_message", json=payload)
+        response = test_client.post("/tts/add_message", json=payload) # Corrected prefix
         assert response.status_code == 201
         msg_ids.append(response.json()["message_id"])
 
@@ -245,7 +245,7 @@ def test_mentions_queue_overflow(
 
     # Add a 4th "mention" message (msg4). This should cause msg2 to be deleted.
     payload_msg4 = {"sent_by": "user_overflow_4", "text": "Overflow test msg 4", "message_type": "mentions"}
-    response_msg4 = test_client.post("/api/tts/add_message", json=payload_msg4)
+    response_msg4 = test_client.post("/tts/add_message", json=payload_msg4) # Corrected prefix
     assert response_msg4.status_code == 201
     msg4_id = response_msg4.json()["message_id"]
     
@@ -273,19 +273,19 @@ def test_mentions_queue_overflow(
 # 4. Test Autoplay Flags
 def test_autoplay_flags(test_client: TestClient):
     # Check initial state (optional, depends on how API initializes it, default in api.py is False)
-    stats_initial = test_client.get("/api/tts/active_queue_stats").json()
+    stats_initial = test_client.get("/tts/active_queue_stats").json() # Corrected prefix
     assert stats_initial["autoplay_enabled"] is False 
 
     # Start Autoplay
-    response_start = test_client.post("/api/tts/autoplay/start")
+    response_start = test_client.post("/tts/autoplay/start") # Corrected prefix
     assert response_start.status_code == 200
-    stats_after_start = test_client.get("/api/tts/active_queue_stats").json()
+    stats_after_start = test_client.get("/tts/active_queue_stats").json() # Corrected prefix
     assert stats_after_start["autoplay_enabled"] is True
 
     # Stop Autoplay
-    response_stop = test_client.post("/api/tts/autoplay/stop")
+    response_stop = test_client.post("/tts/autoplay/stop") # Corrected prefix
     assert response_stop.status_code == 200
-    stats_after_stop = test_client.get("/api/tts/active_queue_stats").json()
+    stats_after_stop = test_client.get("/tts/active_queue_stats").json() # Corrected prefix
     assert stats_after_stop["autoplay_enabled"] is False
 
 
@@ -305,13 +305,13 @@ def test_add_message_invalid_payload(test_client: TestClient):
     
     # Invalid message_type
     invalid_payload_type = {"sent_by": "test_user", "text": "Valid text", "message_type": "invalid_type"}
-    response = test_client.post("/api/tts/add_message", json=invalid_payload_type)
+    response = test_client.post("/tts/add_message", json=invalid_payload_type) # Corrected prefix
     assert response.status_code == 422 # Unprocessable Entity due to Pydantic validation
     assert "message_type must be \"mention\" or \"bits\"" in response.text
 
 
 def test_mark_played_non_existent(test_client: TestClient):
-    response = test_client.post("/api/tts/mark_played/999999") # Non-existent ID
+    response = test_client.post("/tts/mark_played/999999") # Non-existent ID. Corrected prefix.
     assert response.status_code == 404 # Not Found
 
 
@@ -324,7 +324,7 @@ def test_synthesis_error(
     mock_tts_synthesize.side_effect = Exception("Simulated TTS Synthesis Error")
 
     add_payload = {"sent_by": "test_user_synth_error", "text": "This will fail synthesis", "message_type": "bits"}
-    response = test_client.post("/api/tts/add_message", json=add_payload)
+    response = test_client.post("/tts/add_message", json=add_payload) # Corrected prefix
     assert response.status_code == 201
     message_id = response.json()["message_id"]
 

@@ -1,9 +1,10 @@
 import logging
+import os # Added os import
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Body, status as http_status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator # Added field_validator
 from sqlalchemy.orm import Session
 
 from .database import (
@@ -32,7 +33,7 @@ class AddMessagePayload(BaseModel):
     bits_amount: Optional[int] = None
     message_type: str  # "mention" or "bits"
 
-    @validator('message_type')
+    @field_validator('message_type')
     def message_type_must_be_valid(cls, v):
         if v not in ['mention', 'bits']:
             raise ValueError('message_type must be "mention" or "bits"')
@@ -41,7 +42,7 @@ class AddMessagePayload(BaseModel):
 class SwitchQueuePayload(BaseModel):
     queue_type: str
 
-    @validator('queue_type')
+    @field_validator('queue_type')
     def queue_type_must_be_valid(cls, v):
         if v not in ['mentions', 'bits']: # Note: QueueManager uses "mentions" (plural)
             raise ValueError('queue_type must be "mentions" or "bits"')
@@ -316,8 +317,5 @@ async def get_basic_config():
         logger.error(f"Error in /config: {e}", exc_info=True)
         raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-# Need to add os import for path manipulation in play_next
-import os
-
-# Need to add validator import for Pydantic models
-from pydantic import validator
+# Redundant imports removed from here (os, validator)
+# os was moved to top, validator replaced by field_validator

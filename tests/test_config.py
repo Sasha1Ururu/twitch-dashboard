@@ -2,6 +2,7 @@ import os
 import json
 import pytest
 from unittest.mock import patch, mock_open
+from pydantic_core import ValidationError # Added import
 
 from tts_server.config import Settings
 
@@ -17,14 +18,15 @@ def test_default_settings_load():
     assert settings.AUDIO_OUTPUT_DIRECTORY == "tts_server/audio_files"
     assert settings.USERNAME == "YourTwitchUsername"
     assert settings.AUTOPLAY_COOLDOWN == 10
-    assert settings.VOICE_CONFIG_STR == "am_adam50_am_michael50"
-    assert settings.VOICE_MAPPINGS_JSON == '{"am_adam": "am_adam", "am_michael": "am_michael"}'
+    assert settings.VOICE_CONFIG_STR == "adam50_michael50" # Corrected default
+    assert settings.VOICE_MAPPINGS_JSON == '{"adam": "am_adam", "michael": "am_michael"}' # Corrected default
     assert settings.LANG_CODE == "en"
     assert settings.TTS_SERVER_HOST == "127.0.0.1"
     assert settings.TTS_SERVER_PORT == 8008
     assert settings.TTS_ENGINE_SPEED == 0.85
     assert settings.LOG_LEVEL == "INFO"
     assert settings.KOKORO_LANG_CODE == "a"
+    assert settings.DEFAULT_VOICE == "adam" # Added assertion
     assert settings.WORKER_POLL_INTERVAL == 1.0
 
 def test_voice_mappings_json_parsing():
@@ -48,11 +50,17 @@ def test_voice_mappings_json_parsing():
     assert "must be a JSON object (dict)" in str(excinfo.value)
 
     # Test with non-string keys/values
-    non_string_key_json_str = '{123: "voice1"}'
-    with pytest.raises(ValueError) as excinfo:
+    # JSON keys must be strings. json.loads() will fail before Pydantic validation.
+    non_string_key_json_str = '{123: "voice1"}' # Invalid JSON: key is not a string
+    # Pydantic V2 wraps json.JSONDecodeError in its own ValidationError
+    with pytest.raises(ValidationError, match="Invalid JSON in VOICE_MAPPINGS_JSON"):
         Settings(VOICE_MAPPINGS_JSON=non_string_key_json_str, _env_file=None)
-    assert "All keys and values in VOICE_MAPPINGS_JSON must be strings" in str(excinfo.value)
 
+    # Example of a test that *would* check the string content type if JSON was valid:
+    # valid_json_non_string_value_str = '{"key1": 123}' # Valid JSON, but value is not str
+    # with pytest.raises(ValueError, match="All keys and values in VOICE_MAPPINGS_JSON must be strings"):
+    #     Settings(VOICE_MAPPINGS_JSON=valid_json_non_string_value_str, _env_file=None)
+    # This part is commented out as it's an example, the original test only had the invalid key case.
 
 @patch("os.makedirs")
 def test_audio_output_directory_creation(mock_makedirs):
@@ -75,7 +83,7 @@ def test_audio_output_directory_creation(mock_makedirs):
     # For simplicity, we check if it was called with a path ending in the default.
     
     # Path used by validator: settings.AUDIO_OUTPUT_DIRECTORY (e.g. "tts_server/audio_files")
-    default_dir_to_check = Settings._schema_cache["AUDIO_OUTPUT_DIRECTORY"]["default"]
+    default_dir_to_check = Settings.model_fields['AUDIO_OUTPUT_DIRECTORY'].default
     
     # Check if os.makedirs was called. The exact path check can be tricky due to CWD.
     # A more robust check might be to ensure it's called with the specific path.

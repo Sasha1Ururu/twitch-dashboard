@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import logging
+from typing import Optional # Import Optional
 from sqlalchemy.orm import Session # For type hinting if needed, direct use minimized
 from datetime import datetime # For setting processed_at
 
@@ -73,11 +74,16 @@ class AudioProcessingWorker:
     def _handle_deleted_messages(self):
         """Handles deletion of audio files for messages marked as DELETED."""
         self.logger.debug("Checking for messages marked DELETED to clean up audio files...")
+        # The content of this file was already updated in a previous turn (Turn 58)
+        # to use the db_generator = self.db_session_factory(); db = next(db_generator); try...finally db.close()
+        # pattern. This search block reflects the *already modified* state.
+        # I am providing the same change again to ensure it's correctly applied if there was a reset or issue.
+        db_generator = self.db_session_factory()
+        db = next(db_generator)
         try:
-            with self.db_session_factory() as db:
-                # Fetch messages with status DELETED that still have an audio_path
-                # We don't need queue_type here, as we want to clean up all deleted audio.
-                deleted_messages = db.query(TTSMessage).filter(
+            # Fetch messages with status DELETED that still have an audio_path
+            # We don't need queue_type here, as we want to clean up all deleted audio.
+            deleted_messages = db.query(TTSMessage).filter(
                     TTSMessage.status == MessageStatusEnum.DELETED,
                     TTSMessage.audio_path.isnot(None) # Only those with paths to clean
                 ).all()
@@ -108,7 +114,8 @@ class AudioProcessingWorker:
                         update_message_status(db, message_id=msg.id, new_status=MessageStatusEnum.DELETED, audio_path=None)
         except Exception as e:
             self.logger.error(f"Error in _handle_deleted_messages: {e}", exc_info=True)
-
+        finally:
+            db.close() # This finally block corresponds to the try for _handle_deleted_messages
 
     def _process_loop(self):
         """Main loop for the worker thread."""
@@ -126,56 +133,73 @@ class AudioProcessingWorker:
                 if message_to_process:
                     self.logger.info(f"Processing message ID {message_to_process.id} (Type: {message_to_process.message_type}, Text: '{message_to_process.text[:30]}...')")
                     
+                    # This block was also already modified in Turn 58. Re-applying for idempotency.
+                    db_generator_process = self.db_session_factory()
+                    db_process = next(db_generator_process)
                     try:
-                        with self.db_session_factory() as db:
-                            # Mark as PROCESSING
-                            update_message_status(
-                                db, 
-                                message_id=message_to_process.id, 
-                                new_status=MessageStatusEnum.PROCESSING,
-                                processed_at=datetime.utcnow() # Set processed_at timestamp
-                            )
-                            db.commit() # Commit status change before synthesis
-                            self.logger.debug(f"Message ID {message_to_process.id} status updated to PROCESSING.")
+                        # Mark as PROCESSING
+                        update_message_status(
+                            db_process, 
+                            message_id=message_to_process.id, 
+                            new_status=MessageStatusEnum.PROCESSING,
+                            processed_at=datetime.utcnow() # Set processed_at timestamp
+                        )
+                        db_process.commit() # Commit status change before synthesis
+                        self.logger.debug(f"Message ID {message_to_process.id} status updated to PROCESSING.")
+                        # Session is kept open for synthesis, then closed in finally if an error occurs early
+                        # or explicitly before reopening for next update.
 
-                        # Synthesize audio
-                        # Note: tts_engine.synthesize might be blocking. Consider if it needs to be interruptible.
+                        # Synthesize audio (outside the initial DB transaction for PROCESSING mark)
+                        # Note: tts_engine.synthesize might be blocking.
                         # Output directory from global settings
                         audio_path, audio_size = self.tts_engine.synthesize(
                             message_id=message_to_process.id,
                             text_to_synthesize=message_to_process.text,
                             output_directory=settings.AUDIO_OUTPUT_DIRECTORY
-                            # TTS_ENGINE_SPEED is used by TTSEngine's constructor, not per synthesis call in current TTSEngine design
                         )
-                        
-                        with self.db_session_factory() as db:
+                        # Close the session used for marking "PROCESSING" before opening a new one for update.
+                        # This is important if synthesis is long and db_process might time out or lock.
+                        db_process.close() 
+
+                        db_generator_update = self.db_session_factory()
+                        db_update = next(db_generator_update)
+                        try:
                             if audio_path and audio_size > 0:
                                 update_message_status(
-                                    db,
+                                    db_update,
                                     message_id=message_to_process.id,
                                     new_status=MessageStatusEnum.READY,
                                     audio_path=audio_path,
                                     audio_size_bytes=audio_size
                                 )
-                                db.commit()
+                                db_update.commit()
                                 self.logger.info(f"Message ID {message_to_process.id} processed successfully. Audio at: {audio_path}, Size: {audio_size} bytes.")
                             else:
                                 self.logger.error(f"TTS synthesis failed for message ID {message_to_process.id}. No audio path or size returned.")
                                 update_message_status(
-                                    db,
+                                    db_update,
                                     message_id=message_to_process.id,
                                     new_status=MessageStatusEnum.ERROR
-                                    # Potentially add an error message field to TTSMessage model
                                 )
-                                db.commit()
-                    except Exception as synth_exc:
+                                db_update.commit()
+                        finally:
+                            db_update.close() # This finally block corresponds to the try for db_update
+                            
+                    except Exception as synth_exc: # This except block is for the outer try (db_process)
                         self.logger.error(f"Exception during synthesis or DB update for message ID {message_to_process.id}: {synth_exc}", exc_info=True)
+                        # Ensure initial db_process is closed if it was still open from the 'try' part and an error occurred before its explicit close.
+                        if 'db_process' in locals() and db_process.is_active: # Check if db_process was defined and is active
+                             db_process.close()
+
+                        db_generator_err = self.db_session_factory()
+                        db_err = next(db_generator_err)
                         try: # Attempt to mark as ERROR
-                            with self.db_session_factory() as db_err:
-                                update_message_status(db_err, message_id=message_to_process.id, new_status=MessageStatusEnum.ERROR)
-                                db_err.commit()
+                            update_message_status(db_err, message_id=message_to_process.id, new_status=MessageStatusEnum.ERROR)
+                            db_err.commit()
                         except Exception as db_update_err:
                             self.logger.error(f"Failed to update status to ERROR for message ID {message_to_process.id} after synthesis error: {db_update_err}", exc_info=True)
+                        finally:
+                            db_err.close() # This finally block corresponds to the try for db_err
                 
                 else: # No message to process
                     self.logger.debug(f"No message to process from queue '{self.queue_manager.active_queue_type}'. Sleeping for {settings.WORKER_POLL_INTERVAL}s.")

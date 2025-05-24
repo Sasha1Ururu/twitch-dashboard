@@ -60,8 +60,8 @@ def run_migrations_online() -> None:
     """
     # Import DATABASE_URL and set it for Alembic's config
     # from ..config import DATABASE_URL # Old version
-    from tts_server.config import DATABASE_URL # New import style
-    config.set_main_option("sqlalchemy.url", DATABASE_URL)
+    from tts_server.config import settings # New import style
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),

@@ -6,4 +6,5 @@ SQLAlchemy
 alembic
 python-dotenv
 pydantic
+pydantic-settings
 pytest

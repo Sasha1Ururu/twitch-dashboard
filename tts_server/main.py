@@ -110,6 +110,7 @@ async def startup_event():
             voice_config_str=settings.VOICE_CONFIG_STR,
             voice_mappings=settings.parsed_voice_mappings, # Already parsed by Pydantic
             tts_speed=settings.TTS_ENGINE_SPEED,
+            default_voice_friendly_name=settings.DEFAULT_VOICE, # Added new argument
             logger=tts_engine_logger
         )
         app_state['tts_engine'] = tts_engine_instance
