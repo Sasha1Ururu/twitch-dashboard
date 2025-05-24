@@ -186,7 +186,7 @@ def mock_global_kokoro_module(): # Renamed for clarity and simplified
     # Create a mock KPipeline class
     mock_kpipeline_class = MagicMock(name="MockKPipelineClass_Global")
     mock_pipeline_instance = MagicMock(name="MockKPipelineInstance_Global")
-    mock_pipeline_instance.voices = {} # Initialize voices attribute
+    mock_pipeline_instance.voices = dict() # Explicitly initialize as dict
 
     # Define the side effect for the pipeline instance call
     def mock_pipeline_call_effect(text, voice, speed, split_pattern=None):

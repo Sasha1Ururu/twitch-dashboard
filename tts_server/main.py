@@ -22,6 +22,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+import inspect # Added for inspect
 
 # 2. FastAPI App Instance
 app = FastAPI(title="TTS Server")
@@ -100,6 +101,17 @@ async def startup_event():
     logger.info("Initializing database...")
     create_db_and_tables() # Using existing function as init_db
     logger.info("Database initialization complete.")
+
+    # Diagnostic logging for get_db
+    logger.info(f"MAIN STARTUP: get_db type: {type(get_db)}, id: {id(get_db)}")
+    if callable(get_db):
+        logger.info(f"MAIN STARTUP: get_db name: {getattr(get_db, '__name__', 'N/A')}, module: {getattr(get_db, '__module__', 'N/A')}")
+        actual_func = get_db
+        if hasattr(get_db, '__wrapped__'): # For functools.wraps
+            actual_func = get_db.__wrapped__
+        elif hasattr(get_db, 'func'): # For some mock scenarios
+            actual_func = get_db.func
+        logger.info(f"MAIN STARTUP: actual_func get_db name: {getattr(actual_func, '__name__', 'N/A')}, module: {getattr(actual_func, '__module__', 'N/A')}")
 
     # Initialize TTS Engine
     logger.info("Initializing TTSEngine...")

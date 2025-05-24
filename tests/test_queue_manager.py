@@ -6,33 +6,37 @@ from tts_server.queue_manager import QueueManager
 # Import related items that might be needed for mocks or type checking
 from tts_server.database import TTSMessage, MessageStatusEnum 
 
+from sqlalchemy.orm import Session # Import Session for spec
+
 @pytest.fixture
 def mock_db_session():
     """Provides a mock database session."""
-    session = MagicMock()
+    session = MagicMock(spec=Session) # Added spec=Session
     # Configure specific query results if needed per test, or here for general cases
     # session.query.return_value.filter.return_value.first.return_value = None # Example
     return session
 
 @pytest.fixture
-def mock_db_session_factory(mock_db_session):
-    """Provides a mock database session factory that returns the mock_db_session."""
-    # The factory should behave as a context manager if used with 'with ... as db:'
-    factory = MagicMock()
-    
-    # To make it work with 'with db_session_factory() as db:'
-    # The factory itself doesn't need to be a context manager, 
-    # but the object it *returns* (the session) might be used as one by SQLAlchemy,
-    # or directly as in the QueueManager.
-    # QueueManager uses: `with self.db_session_factory() as db:`
-    # So, the factory's __call__ should return an object that is a context manager.
-    
-    mock_context_manager = MagicMock()
-    mock_context_manager.__enter__.return_value = mock_db_session # This is 'db'
-    mock_context_manager.__exit__.return_value = None # Typically returns None or False
+def mock_db_session_factory(mock_db_session): # Depends on the refined mock_db_session
+    """
+    Provides a mock database session factory.
+    When called, its side_effect returns a generator that yields the mock_db_session.
+    This aligns with the `db = next(self.db_session_factory())` pattern.
+    """
+    # This inner function is the generator function.
+    # When called, it returns a generator object.
+    def _mock_db_session_generator():
+        yield mock_db_session
+        # No more yields needed as QueueManager calls next() once per try/finally block.
 
-    factory.return_value = mock_context_manager # factory() now returns the context manager
-    return factory
+    # This is the mock for the factory object itself.
+    # It's what `queue_manager_instance.db_session_factory` will be.
+    mock_factory = MagicMock()
+    # When `mock_factory()` is called (i.e., `self.db_session_factory()`),
+    # its `side_effect` is invoked. Since `_mock_db_session_generator`
+    # is a generator function, calling it returns a generator object.
+    mock_factory.side_effect = _mock_db_session_generator
+    return mock_factory
 
 
 @pytest.fixture

@@ -28,7 +28,9 @@ class TTSEngine:
             logger: A Python logger instance. Uses a default logger if None.
         """
         self.logger = logger if logger else default_logger
-        self.logger.info(f"Initializing TTSEngine with lang_code='{lang_code}', speed={tts_speed}")
+        # Add detailed input logging here
+        self.logger.info(f"TTSEngine __init__ received: lang_code='{lang_code}', voice_config_str='{voice_config_str}', voice_mappings_keys={list(voice_mappings.keys()) if voice_mappings else None}, tts_speed={tts_speed}, default_voice_friendly_name='{default_voice_friendly_name}'")
+        self.logger.info(f"Initializing TTSEngine with lang_code='{lang_code}', speed={tts_speed}") # Original info log
         self.logger.debug(f"Voice config string: '{voice_config_str}', Mappings: {voice_mappings}, Default friendly voice: {default_voice_friendly_name}")
 
         try:
@@ -59,6 +61,8 @@ class TTSEngine:
         """
         Parses the voice configuration string and applies new logic for default voice and normalization.
         """
+        # Add detailed input logging here
+        self.logger.info(f"TTSEngine _parse_voice_config received: voice_config_str='{voice_config_str}', voice_mappings_keys={list(voice_mappings.keys()) if voice_mappings else None}, default_voice_friendly_name='{default_voice_friendly_name}'")
         self.logger.debug(
             f"Parsing voice config: '{voice_config_str}' with mappings: {voice_mappings}, "
             f"default_voice: '{default_voice_friendly_name}'"
@@ -197,7 +201,9 @@ class TTSEngine:
                 self.logger.info(f"Pre-loading voice model for '{voice_name}'...")
                 try:
                     # Use minimal text to load the voice embedding
+                    self.logger.debug(f"Before pre-load call for '{voice_name}'. Current pipeline.voices keys: {list(self.pipeline.voices.keys())}")
                     _ = list(self.pipeline(".", voice=voice_name, speed=1.0)) 
+                    self.logger.debug(f"After pre-load call for '{voice_name}'. Current pipeline.voices keys: {list(self.pipeline.voices.keys())}")
                     self.logger.info(f"Successfully pre-loaded voice '{voice_name}'.")
                 except Exception as e:
                     self.logger.error(f"Failed to pre-load voice '{voice_name}': {e}", exc_info=True)

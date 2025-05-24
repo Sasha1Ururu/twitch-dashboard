@@ -1,10 +1,13 @@
 import os
+print("AUDIO_WORKER_FILE_VERSION_5_LOADED_FOR_TESTING") # Sanity print
+import os
 import time
 import threading
 import logging
-from typing import Optional # Import Optional
-from sqlalchemy.orm import Session # For type hinting if needed, direct use minimized
-from datetime import datetime # For setting processed_at
+import inspect # Ensure inspect is imported
+from typing import Optional
+from sqlalchemy.orm import Session
+from datetime import datetime
 
 from .database import (
     TTSMessage,         # For type hinting
@@ -34,10 +37,21 @@ class AudioProcessingWorker:
             db_session_factory: A callable that provides a DB session.
             logger: A Python logger instance. Uses a default logger if None.
         """
+        self.logger = logger if logger else default_logger # Logger needs to be set first
+        # Diagnostic logging for db_session_factory (already added in Turn 110, re-applying to be sure)
+        self.logger.info(f"AudioProcessingWorker INIT: db_session_factory type: {type(db_session_factory)}, id: {id(db_session_factory)}")
+        if callable(db_session_factory):
+            self.logger.info(f"AudioProcessingWorker INIT: db_session_factory name: {getattr(db_session_factory, '__name__', 'N/A')}, module: {getattr(db_session_factory, '__module__', 'N/A')}")
+            actual_func_aw = db_session_factory 
+            if hasattr(db_session_factory, '__wrapped__'): 
+                 actual_func_aw = db_session_factory.__wrapped__
+            elif hasattr(db_session_factory, 'func'): 
+                 actual_func_aw = db_session_factory.func
+            self.logger.info(f"AudioProcessingWorker INIT: actual_func_aw db_session_factory name: {getattr(actual_func_aw, '__name__', 'N/A')}, module: {getattr(actual_func_aw, '__module__', 'N/A')}")
+
         self.queue_manager = queue_manager
         self.tts_engine = tts_engine
         self.db_session_factory = db_session_factory
-        self.logger = logger if logger else default_logger
         
         self._stop_event = threading.Event()
         self.thread = threading.Thread(target=self._process_loop, daemon=True)
@@ -88,34 +102,38 @@ class AudioProcessingWorker:
                     TTSMessage.audio_path.isnot(None) # Only those with paths to clean
                 ).all()
 
-                if not deleted_messages:
-                    self.logger.debug("No DELETED messages with audio files to clean up.")
-                    return
+            if not deleted_messages: # Corrected indentation
+                self.logger.debug("No DELETED messages with audio files to clean up.")
+                # Ensure db is closed before returning if we got it from generator
+                db.close() 
+                return # Corrected indentation
 
-                self.logger.info(f"Found {len(deleted_messages)} DELETED messages with audio files to clean.")
-                for msg in deleted_messages:
-                    if msg.audio_path and os.path.exists(msg.audio_path):
-                        try:
-                            os.remove(msg.audio_path)
-                            self.logger.info(f"Successfully deleted audio file: {msg.audio_path} for message ID {msg.id}.")
-                            # Update message to nullify audio_path to prevent re-processing
-                            update_message_status(db, message_id=msg.id, new_status=MessageStatusEnum.DELETED, audio_path=None)
-                            self.logger.debug(f"Nullified audio_path for message ID {msg.id}.")
-                        except OSError as e:
-                            self.logger.error(f"Error deleting audio file {msg.audio_path} for message ID {msg.id}: {e}", exc_info=True)
-                            # Optionally, update status to ERROR or keep as DELETED but log the issue.
-                            # For now, it will remain DELETED with path, and retry deletion next cycle.
-                            # Or, to prevent retry loops on permission errors, nullify path anyway or use a sub-status.
-                            # Let's nullify to avoid repeated attempts on files that might be problematic (e.g. locked)
-                            update_message_status(db, message_id=msg.id, new_status=MessageStatusEnum.DELETED, audio_path=None)
-                            self.logger.warning(f"Nullified audio_path for message ID {msg.id} after deletion error to prevent retries.")
-                    elif msg.audio_path: # Path exists in DB but not on disk
-                        self.logger.warning(f"Audio file {msg.audio_path} for DELETED message ID {msg.id} not found on disk. Nullifying path.")
+            self.logger.info(f"Found {len(deleted_messages)} DELETED messages with audio files to clean.")
+            for msg in deleted_messages:
+                if msg.audio_path and os.path.exists(msg.audio_path):
+                    try:
+                        os.remove(msg.audio_path)
+                        self.logger.info(f"Successfully deleted audio file: {msg.audio_path} for message ID {msg.id}.")
+                        # Update message to nullify audio_path to prevent re-processing
                         update_message_status(db, message_id=msg.id, new_status=MessageStatusEnum.DELETED, audio_path=None)
+                        self.logger.debug(f"Nullified audio_path for message ID {msg.id}.")
+                    except OSError as e:
+                        self.logger.error(f"Error deleting audio file {msg.audio_path} for message ID {msg.id}: {e}", exc_info=True)
+                        # Optionally, update status to ERROR or keep as DELETED but log the issue.
+                        # For now, it will remain DELETED with path, and retry deletion next cycle.
+                        # Or, to prevent retry loops on permission errors, nullify path anyway or use a sub-status.
+                        # Let's nullify to avoid repeated attempts on files that might be problematic (e.g. locked)
+                        update_message_status(db, message_id=msg.id, new_status=MessageStatusEnum.DELETED, audio_path=None)
+                        self.logger.warning(f"Nullified audio_path for message ID {msg.id} after deletion error to prevent retries.")
+                elif msg.audio_path: # Path exists in DB but not on disk
+                    self.logger.warning(f"Audio file {msg.audio_path} for DELETED message ID {msg.id} not found on disk. Nullifying path.")
+                    update_message_status(db, message_id=msg.id, new_status=MessageStatusEnum.DELETED, audio_path=None)
         except Exception as e:
             self.logger.error(f"Error in _handle_deleted_messages: {e}", exc_info=True)
         finally:
-            db.close() # This finally block corresponds to the try for _handle_deleted_messages
+            # Ensure db is closed if it was successfully obtained from the generator
+            if 'db' in locals() and hasattr(db, 'close'):
+                db.close()
 
     def _process_loop(self):
         """Main loop for the worker thread."""

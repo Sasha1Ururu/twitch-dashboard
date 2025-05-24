@@ -1,5 +1,7 @@
+print("QUEUE_MANAGER_FILE_VERSION_5_LOADED_FOR_TESTING")
 import os
 import logging
+import inspect # Added for inspect
 from sqlalchemy.orm import Session
 from typing import Optional, Callable, Dict, Any, List
 
@@ -28,8 +30,18 @@ class QueueManager:
             db_session_factory: A callable that provides a DB session (e.g., get_db).
             logger: A Python logger instance. Uses a default logger if None.
         """
+        self.logger = logger if logger else default_logger # Logger needs to be set first
+        self.logger.info(f"QueueManager INIT: db_session_factory type: {type(db_session_factory)}, id: {id(db_session_factory)}")
+        if callable(db_session_factory):
+            self.logger.info(f"QueueManager INIT: db_session_factory name: {getattr(db_session_factory, '__name__', 'N/A')}, module: {getattr(db_session_factory, '__module__', 'N/A')}")
+            actual_func = db_session_factory
+            if hasattr(db_session_factory, '__wrapped__'):
+                 actual_func = db_session_factory.__wrapped__
+            elif hasattr(db_session_factory, 'func'): # For MagicMock a .func attribute is not standard for side_effect
+                 actual_func = db_session_factory.func
+            self.logger.info(f"QueueManager INIT: actual_func db_session_factory name: {getattr(actual_func, '__name__', 'N/A')}, module: {getattr(actual_func, '__module__', 'N/A')}")
+
         self.db_session_factory = db_session_factory
-        self.logger = logger if logger else default_logger
         self.active_queue_type: str = "mentions"  # Default active queue
         
         # Max audio bytes for the "mentions" queue (e.g., 200MB)
@@ -61,35 +73,35 @@ class QueueManager:
             new_message = add_message(db, message_data)
             self.logger.info(f"Message ID {new_message.id} (type: {queue_type}) added to DB with status PENDING.")
 
-                # Overflow management for "mentions" queue
-                if queue_type == "mentions":
-                    current_total_size = get_total_audio_size(db, queue_type="mentions")
-                    self.logger.debug(f"Current total audio size for 'mentions' queue: {current_total_size / (1024*1024):.2f}MB.")
+            # Overflow management for "mentions" queue
+            if queue_type == "mentions":
+                current_total_size = get_total_audio_size(db, queue_type="mentions")
+                self.logger.debug(f"Current total audio size for 'mentions' queue: {current_total_size / (1024*1024):.2f}MB.")
+                
+                if current_total_size > self.MENTIONS_QUEUE_MAX_AUDIO_BYTES:
+                    size_to_free = current_total_size - self.MENTIONS_QUEUE_MAX_AUDIO_BYTES
+                    self.logger.warning(
+                        f"'mentions' queue size ({current_total_size / (1024*1024):.2f}MB) "
+                        f"exceeds limit ({self.MENTIONS_QUEUE_MAX_AUDIO_BYTES / (1024*1024):.2f}MB). "
+                        f"Need to free {size_to_free / (1024*1024):.2f}MB."
+                    )
                     
-                    if current_total_size > self.MENTIONS_QUEUE_MAX_AUDIO_BYTES:
-                        size_to_free = current_total_size - self.MENTIONS_QUEUE_MAX_AUDIO_BYTES
-                        self.logger.warning(
-                            f"'mentions' queue size ({current_total_size / (1024*1024):.2f}MB) "
-                            f"exceeds limit ({self.MENTIONS_QUEUE_MAX_AUDIO_BYTES / (1024*1024):.2f}MB). "
-                            f"Need to free {size_to_free / (1024*1024):.2f}MB."
-                        )
+                    # Get oldest READY messages to delete to free up space
+                    messages_to_remove = get_messages_to_delete_for_overflow(db, queue_type="mentions", size_to_free=size_to_free)
+                    
+                    if messages_to_remove:
+                        ids_to_remove = [msg.id for msg in messages_to_remove]
+                        self.logger.info(f"Overflow: Marking {len(ids_to_remove)} messages for deletion: {ids_to_remove}")
                         
-                        # Get oldest READY messages to delete to free up space
-                        messages_to_remove = get_messages_to_delete_for_overflow(db, queue_type="mentions", size_to_free=size_to_free)
-                        
-                        if messages_to_remove:
-                            ids_to_remove = [msg.id for msg in messages_to_remove]
-                            self.logger.info(f"Overflow: Marking {len(ids_to_remove)} messages for deletion: {ids_to_remove}")
-                            
-                            # Mark messages as DELETED in DB
-                            # Note: `mark_messages_as_deleted` already takes `message_ids`.
-                            # The `new_status` parameter was not in its original definition,
-                            # it implicitly sets status to DELETED.
-                            count_deleted = mark_messages_as_deleted(db, message_ids=ids_to_remove)
-                            self.logger.info(f"{count_deleted} messages marked as DELETED due to overflow.")
-                        else:
-                            self.logger.warning("Overflow condition, but no suitable messages found to delete to free space.")
-                return new_message
+                        # Mark messages as DELETED in DB
+                        # Note: `mark_messages_as_deleted` already takes `message_ids`.
+                        # The `new_status` parameter was not in its original definition,
+                        # it implicitly sets status to DELETED.
+                        count_deleted = mark_messages_as_deleted(db, message_ids=ids_to_remove)
+                        self.logger.info(f"{count_deleted} messages marked as DELETED due to overflow.")
+                    else:
+                        self.logger.warning("Overflow condition, but no suitable messages found to delete to free space.")
+            return new_message
         except Exception as e:
             self.logger.error(f"Error adding message to queue: {e}", exc_info=True)
             return None

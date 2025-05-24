@@ -18,15 +18,15 @@ def test_default_settings_load():
     assert settings.AUDIO_OUTPUT_DIRECTORY == "tts_server/audio_files"
     assert settings.USERNAME == "YourTwitchUsername"
     assert settings.AUTOPLAY_COOLDOWN == 10
-    assert settings.VOICE_CONFIG_STR == "adam50_michael50" # Corrected default
-    assert settings.VOICE_MAPPINGS_JSON == '{"adam": "am_adam", "michael": "am_michael"}' # Corrected default
+    assert settings.VOICE_CONFIG_STR == "adam50_michael50" # Re-apply correct default
+    assert settings.VOICE_MAPPINGS_JSON == '{"adam": "am_adam", "michael": "am_michael"}' # Re-apply correct default
     assert settings.LANG_CODE == "en"
     assert settings.TTS_SERVER_HOST == "127.0.0.1"
     assert settings.TTS_SERVER_PORT == 8008
     assert settings.TTS_ENGINE_SPEED == 0.85
     assert settings.LOG_LEVEL == "INFO"
     assert settings.KOKORO_LANG_CODE == "a"
-    assert settings.DEFAULT_VOICE == "adam" # Added assertion
+    assert settings.DEFAULT_VOICE == "adam" # Re-apply correct assertion
     assert settings.WORKER_POLL_INTERVAL == 1.0
 
 def test_voice_mappings_json_parsing():
